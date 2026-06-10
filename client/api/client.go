@@ -38,14 +38,22 @@ func New(baseURL, apiKey string) *Client {
 	}
 }
 
-func (c *Client) do(req *http.Request) (*http.Response, error) {
+// do builds and sends a request, returning a clear error if the configured
+// server URL is unparseable rather than panicking on a nil request.
+func (c *Client) do(method, url string, body io.Reader, contentType string) (*http.Response, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, fmt.Errorf("invalid server URL %q (did you include http://?): %w", c.baseURL, err)
+	}
 	req.Header.Set("X-API-Key", c.apiKey)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 	return c.http.Do(req)
 }
 
 func (c *Client) ListGames() ([]Game, error) {
-	req, _ := http.NewRequest("GET", c.baseURL+"/games", nil)
-	resp, err := c.do(req)
+	resp, err := c.do("GET", c.baseURL+"/games", nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -59,9 +67,7 @@ func (c *Client) ListGames() ([]Game, error) {
 
 func (c *Client) RegisterGame(id, name string) error {
 	body, _ := json.Marshal(map[string]string{"id": id, "name": name})
-	req, _ := http.NewRequest("POST", c.baseURL+"/games", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.do(req)
+	resp, err := c.do("POST", c.baseURL+"/games", bytes.NewReader(body), "application/json")
 	if err != nil {
 		return err
 	}
@@ -74,8 +80,7 @@ func (c *Client) RegisterGame(id, name string) error {
 }
 
 func (c *Client) ListSaves(gameID string) ([]Save, error) {
-	req, _ := http.NewRequest("GET", c.baseURL+"/games/"+gameID+"/saves", nil)
-	resp, err := c.do(req)
+	resp, err := c.do("GET", c.baseURL+"/games/"+gameID+"/saves", nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -103,9 +108,7 @@ func (c *Client) UploadSave(gameID, machineName string, data io.Reader) error {
 	}
 	mw.Close()
 
-	req, _ := http.NewRequest("POST", c.baseURL+"/games/"+gameID+"/saves", &buf)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	resp, err := c.do(req)
+	resp, err := c.do("POST", c.baseURL+"/games/"+gameID+"/saves", &buf, mw.FormDataContentType())
 	if err != nil {
 		return err
 	}
@@ -118,8 +121,7 @@ func (c *Client) UploadSave(gameID, machineName string, data io.Reader) error {
 }
 
 func (c *Client) DownloadLatest(gameID string) (io.ReadCloser, error) {
-	req, _ := http.NewRequest("GET", c.baseURL+"/games/"+gameID+"/saves/latest", nil)
-	resp, err := c.do(req)
+	resp, err := c.do("GET", c.baseURL+"/games/"+gameID+"/saves/latest", nil, "")
 	if err != nil {
 		return nil, err
 	}

@@ -349,10 +349,9 @@ func (u *App) showAddDialog() {
 			}
 			id := toSlug(name)
 
-			if err := u.client.RegisterGame(id, name); err != nil {
-				dialog.ShowError(fmt.Errorf("server registration failed: %w", err), u.win)
-				return
-			}
+			// Persist locally first so the game is saved even if the server
+			// is unreachable. Server registration is best-effort and also
+			// happens (idempotently) on the first push.
 			u.cfg.Games[id] = config.GameEntry{Name: name, LocalPath: path}
 			if err := u.cfg.Save(); err != nil {
 				dialog.ShowError(fmt.Errorf("could not save config: %w", err), u.win)
@@ -360,6 +359,14 @@ func (u *App) showAddDialog() {
 			}
 			u.refreshList()
 			u.gameSelect.SetSelected(name)
+
+			go func() {
+				if err := u.client.RegisterGame(id, name); err != nil {
+					dialog.ShowError(fmt.Errorf(
+						"game saved locally, but could not register with the server "+
+							"(it will retry on push):\n%w", err), u.win)
+				}
+			}()
 		},
 		u.win,
 	)
@@ -387,7 +394,7 @@ func (u *App) showSettings() {
 			if !ok {
 				return
 			}
-			u.cfg.ServerURL = strings.TrimRight(strings.TrimSpace(urlEntry.Text), "/")
+			u.cfg.ServerURL = config.NormalizeServerURL(urlEntry.Text)
 			u.cfg.APIKey = keyEntry.Text
 			u.cfg.MachineName = strings.TrimSpace(machineEntry.Text)
 			u.client = api.New(u.cfg.ServerURL, u.cfg.APIKey)

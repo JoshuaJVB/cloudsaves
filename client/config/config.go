@@ -5,7 +5,22 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
+
+// NormalizeServerURL trims whitespace/trailing slashes and ensures the URL has
+// an http:// scheme. Without a scheme, net/http fails to parse the URL, which
+// previously caused a hard crash. Returns "" unchanged.
+func NormalizeServerURL(raw string) string {
+	s := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if s == "" {
+		return s
+	}
+	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
+		s = "http://" + s
+	}
+	return s
+}
 
 type GameEntry struct {
 	Name      string `json:"name"`
@@ -70,6 +85,7 @@ func Load() (*Config, error) {
 	if cfg.Games == nil {
 		cfg.Games = make(map[string]GameEntry)
 	}
+	cfg.ServerURL = NormalizeServerURL(cfg.ServerURL)
 	return &cfg, nil
 }
 
