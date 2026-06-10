@@ -37,7 +37,7 @@ Start the server:
 docker compose up -d
 ```
 
-The server listens on port `8080`. Saves are persisted in `server/data/` on the host. To change the port, edit the `ports` line in `docker-compose.yml`.
+The server listens on port `45231`. Saves are persisted in `server/data/` on the host. To change the port, edit the `ports` line in `docker-compose.yml`.
 
 ---
 
@@ -72,7 +72,7 @@ go build -o cloudsave .
 
 1. Launch the client (`cloudsave.exe` on Windows, `./cloudsave` on Linux).
 2. Click the **gear icon** (Settings) and fill in:
-   - **Server URL** — e.g. `http://192.168.1.100:8080`
+   - **Server URL** — e.g. `http://192.168.1.100:45231`
    - **API Key** — must match the key set in `docker-compose.yml`
    - **Machine Name** — a label for this PC (pre-filled with your hostname)
 3. Click **Add Game**, enter the game name, and browse to its save folder or file.

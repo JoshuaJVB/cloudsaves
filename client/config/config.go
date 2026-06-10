@@ -54,7 +54,7 @@ func Load() (*Config, error) {
 	if os.IsNotExist(err) {
 		hostname, _ := os.Hostname()
 		return &Config{
-			ServerURL:   "http://localhost:8080",
+			ServerURL:   "http://localhost:45231",
 			APIKey:      "",
 			MachineName: hostname,
 			Games:       make(map[string]GameEntry),
