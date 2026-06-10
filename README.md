@@ -56,7 +56,14 @@ go mod tidy
 
 **Build for Windows:**
 ```bash
-go build -o cloudsave.exe .
+# Install the Fyne packaging tool (first time only)
+go install fyne.io/tools/cmd/fyne@latest
+
+# Generate the app icon (first time only, must be run from the client/ directory)
+go run gen_icon.go
+
+# Package the application
+fyne package -os windows -name "CloudSave"
 ```
 
 **Build for Linux:**
