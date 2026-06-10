@@ -1,0 +1,423 @@
+package ui
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
+
+	"cloudsave/api"
+	"cloudsave/archive"
+	"cloudsave/config"
+)
+
+type App struct {
+	fyneApp fyne.App
+	win     fyne.Window
+	cfg     *config.Config
+	client  *api.Client
+
+	gameSelect *widget.Select
+	gameIDs    []string // parallel slice to gameSelect.Options
+
+	localPathLabel     *widget.Label
+	localModLabel      *widget.Label
+	serverMachineLabel *widget.Label
+	serverTimeLabel    *widget.Label
+	serverSizeLabel    *widget.Label
+	statusLabel        *widget.Label
+
+	pushBtn *widget.Button
+	pullBtn *widget.Button
+}
+
+func Run() {
+	a := app.New()
+	w := a.NewWindow("CloudSave")
+	w.Resize(fyne.NewSize(560, 440))
+
+	u := &App{fyneApp: a, win: w}
+
+	cfg, err := config.Load()
+	if err != nil {
+		cfg = &config.Config{Games: make(map[string]config.GameEntry)}
+	}
+	u.cfg = cfg
+	u.client = api.New(cfg.ServerURL, cfg.APIKey)
+
+	w.SetContent(u.build())
+	u.refreshList()
+	w.ShowAndRun()
+}
+
+func (u *App) build() fyne.CanvasObject {
+	u.gameSelect = widget.NewSelect(nil, u.onSelect)
+	u.gameSelect.PlaceHolder = "Select a game..."
+
+	addBtn := widget.NewButtonWithIcon("Add Game", theme.ContentAddIcon(), u.showAddDialog)
+	settingsBtn := widget.NewButtonWithIcon("", theme.SettingsIcon(), u.showSettings)
+
+	topBar := container.NewBorder(
+		nil, nil, nil,
+		container.NewHBox(settingsBtn),
+		container.NewBorder(nil, nil, nil, addBtn, u.gameSelect),
+	)
+
+	// Local section
+	u.localPathLabel = widget.NewLabel("—")
+	u.localPathLabel.Wrapping = fyne.TextWrapWord
+	u.localModLabel = widget.NewLabel("—")
+
+	localCard := widget.NewCard("Local", "",
+		container.NewVBox(
+			labelRow("Path:", u.localPathLabel),
+			labelRow("Modified:", u.localModLabel),
+		),
+	)
+
+	// Server section
+	u.serverMachineLabel = widget.NewLabel("—")
+	u.serverTimeLabel = widget.NewLabel("—")
+	u.serverSizeLabel = widget.NewLabel("—")
+
+	serverCard := widget.NewCard("Server", "",
+		container.NewVBox(
+			labelRow("Machine:", u.serverMachineLabel),
+			labelRow("Uploaded:", u.serverTimeLabel),
+			labelRow("Size:", u.serverSizeLabel),
+		),
+	)
+
+	u.statusLabel = widget.NewLabel("")
+
+	u.pushBtn = widget.NewButtonWithIcon("Push to Server", theme.UploadIcon(), u.onPush)
+	u.pullBtn = widget.NewButtonWithIcon("Pull from Server", theme.DownloadIcon(), u.onPull)
+	u.pushBtn.Disable()
+	u.pullBtn.Disable()
+
+	actionRow := container.NewHBox(layout.NewSpacer(), u.pushBtn, u.pullBtn, layout.NewSpacer())
+
+	return container.NewVBox(
+		topBar,
+		widget.NewSeparator(),
+		localCard,
+		serverCard,
+		u.statusLabel,
+		widget.NewSeparator(),
+		actionRow,
+	)
+}
+
+// labelRow builds a tight two-label row used in the info cards.
+func labelRow(heading string, value *widget.Label) *fyne.Container {
+	h := widget.NewLabelWithStyle(heading, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	return container.NewHBox(h, value)
+}
+
+func (u *App) refreshList() {
+	type pair struct{ id, name string }
+	var pairs []pair
+	for id, g := range u.cfg.Games {
+		pairs = append(pairs, pair{id, g.Name})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
+
+	u.gameIDs = make([]string, len(pairs))
+	names := make([]string, len(pairs))
+	for i, p := range pairs {
+		u.gameIDs[i] = p.id
+		names[i] = p.name
+	}
+	u.gameSelect.Options = names
+	u.gameSelect.Refresh()
+}
+
+func (u *App) selectedID() (string, bool) {
+	for i, name := range u.gameSelect.Options {
+		if name == u.gameSelect.Selected {
+			if i < len(u.gameIDs) {
+				return u.gameIDs[i], true
+			}
+		}
+	}
+	return "", false
+}
+
+func (u *App) onSelect(name string) {
+	id, ok := u.selectedID()
+	if !ok {
+		return
+	}
+	entry := u.cfg.Games[id]
+
+	// Reset UI state
+	u.localPathLabel.SetText(entry.LocalPath)
+	if fi, err := os.Stat(entry.LocalPath); err == nil {
+		u.localModLabel.SetText(fi.ModTime().Format("2006-01-02 15:04:05"))
+	} else {
+		u.localModLabel.SetText("(not found locally)")
+	}
+	u.serverMachineLabel.SetText("checking...")
+	u.serverTimeLabel.SetText("—")
+	u.serverSizeLabel.SetText("—")
+	u.statusLabel.SetText("")
+	u.pushBtn.Disable()
+	u.pullBtn.Disable()
+
+	go func() {
+		saves, err := u.client.ListSaves(id)
+		if err != nil {
+			u.serverMachineLabel.SetText("—")
+			u.serverTimeLabel.SetText("—")
+			u.serverSizeLabel.SetText("—")
+			u.statusLabel.SetText("Could not reach server: " + err.Error())
+			return
+		}
+
+		if len(saves) == 0 {
+			u.serverMachineLabel.SetText("—")
+			u.serverTimeLabel.SetText("No saves yet")
+			u.serverSizeLabel.SetText("—")
+			u.statusLabel.SetText("No saves on server — push to create the first one.")
+			u.pushBtn.Enable()
+			return
+		}
+
+		latest := saves[0]
+		u.serverMachineLabel.SetText(latest.MachineName)
+		u.serverTimeLabel.SetText(latest.UploadedAt.Local().Format("2006-01-02 15:04:05"))
+		u.serverSizeLabel.SetText(formatBytes(latest.FileSize))
+
+		localMod := time.Time{}
+		if fi, err := os.Stat(entry.LocalPath); err == nil {
+			localMod = fi.ModTime()
+		}
+
+		switch {
+		case localMod.IsZero():
+			u.statusLabel.SetText("Local save not found — pull to restore.")
+			u.pullBtn.Enable()
+		case localMod.After(latest.UploadedAt):
+			u.statusLabel.SetText("Local is newer than server.")
+			u.pushBtn.Enable()
+			u.pullBtn.Enable()
+		case latest.UploadedAt.After(localMod):
+			u.statusLabel.SetText("Server is newer than local.")
+			u.pushBtn.Enable()
+			u.pullBtn.Enable()
+		default:
+			u.statusLabel.SetText("In sync.")
+			u.pushBtn.Enable()
+			u.pullBtn.Enable()
+		}
+	}()
+}
+
+func (u *App) onPush() {
+	id, ok := u.selectedID()
+	if !ok {
+		return
+	}
+	entry := u.cfg.Games[id]
+
+	prog := dialog.NewProgressInfinite("Pushing", "Compressing and uploading...", u.win)
+	prog.Show()
+
+	go func() {
+		defer prog.Hide()
+
+		// Ensure the game is registered (idempotent).
+		if err := u.client.RegisterGame(id, entry.Name); err != nil {
+			dialog.ShowError(fmt.Errorf("server registration failed: %w", err), u.win)
+			return
+		}
+
+		var buf bytes.Buffer
+		if err := archive.Pack(entry.LocalPath, &buf); err != nil {
+			dialog.ShowError(fmt.Errorf("could not zip save: %w", err), u.win)
+			return
+		}
+		if err := u.client.UploadSave(id, u.cfg.MachineName, &buf); err != nil {
+			dialog.ShowError(fmt.Errorf("upload failed: %w", err), u.win)
+			return
+		}
+		dialog.ShowInformation("Done", "Save pushed to server.", u.win)
+		u.onSelect(u.gameSelect.Selected)
+	}()
+}
+
+func (u *App) onPull() {
+	id, ok := u.selectedID()
+	if !ok {
+		return
+	}
+	entry := u.cfg.Games[id]
+
+	dialog.ShowConfirm(
+		"Pull Save",
+		"This will overwrite your local files with the server version.\nContinue?",
+		func(confirmed bool) {
+			if !confirmed {
+				return
+			}
+			prog := dialog.NewProgressInfinite("Pulling", "Downloading save...", u.win)
+			prog.Show()
+
+			go func() {
+				defer prog.Hide()
+
+				rc, err := u.client.DownloadLatest(id)
+				if err != nil {
+					dialog.ShowError(err, u.win)
+					return
+				}
+				defer rc.Close()
+
+				// Stream to temp file so zip.NewReader gets a ReaderAt + known size.
+				tmp, err := os.CreateTemp("", "cloudsave-*.zip")
+				if err != nil {
+					dialog.ShowError(err, u.win)
+					return
+				}
+				defer tmp.Close()
+				defer os.Remove(tmp.Name())
+
+				size, err := io.Copy(tmp, rc)
+				if err != nil {
+					dialog.ShowError(err, u.win)
+					return
+				}
+
+				dest := filepath.Dir(entry.LocalPath)
+				if err := archive.Unpack(tmp, size, dest); err != nil {
+					dialog.ShowError(fmt.Errorf("could not extract save: %w", err), u.win)
+					return
+				}
+				dialog.ShowInformation("Done", "Save pulled from server.", u.win)
+				u.onSelect(u.gameSelect.Selected)
+			}()
+		},
+		u.win,
+	)
+}
+
+func (u *App) showAddDialog() {
+	nameEntry := widget.NewEntry()
+	nameEntry.SetPlaceHolder("e.g. Stardew Valley")
+
+	pathEntry := widget.NewEntry()
+	pathEntry.SetPlaceHolder("Local save folder or file")
+
+	browseBtn := widget.NewButton("Browse...", func() {
+		dialog.ShowFolderOpen(func(lu fyne.ListableURI, err error) {
+			if err != nil || lu == nil {
+				return
+			}
+			pathEntry.SetText(lu.Path())
+		}, u.win)
+	})
+
+	pathRow := container.NewBorder(nil, nil, nil, browseBtn, pathEntry)
+
+	d := dialog.NewForm("Add Game", "Add", "Cancel",
+		[]*widget.FormItem{
+			{Text: "Game Name", Widget: nameEntry},
+			{Text: "Save Path", Widget: pathRow},
+		},
+		func(ok bool) {
+			if !ok {
+				return
+			}
+			name := strings.TrimSpace(nameEntry.Text)
+			path := strings.TrimSpace(pathEntry.Text)
+			if name == "" || path == "" {
+				dialog.ShowError(fmt.Errorf("both fields are required"), u.win)
+				return
+			}
+			id := toSlug(name)
+
+			if err := u.client.RegisterGame(id, name); err != nil {
+				dialog.ShowError(fmt.Errorf("server registration failed: %w", err), u.win)
+				return
+			}
+			u.cfg.Games[id] = config.GameEntry{Name: name, LocalPath: path}
+			if err := u.cfg.Save(); err != nil {
+				dialog.ShowError(fmt.Errorf("could not save config: %w", err), u.win)
+				return
+			}
+			u.refreshList()
+			u.gameSelect.SetSelected(name)
+		},
+		u.win,
+	)
+	d.Resize(fyne.NewSize(500, 220))
+	d.Show()
+}
+
+func (u *App) showSettings() {
+	urlEntry := widget.NewEntry()
+	urlEntry.SetText(u.cfg.ServerURL)
+
+	keyEntry := widget.NewPasswordEntry()
+	keyEntry.SetText(u.cfg.APIKey)
+
+	machineEntry := widget.NewEntry()
+	machineEntry.SetText(u.cfg.MachineName)
+
+	d := dialog.NewForm("Settings", "Save", "Cancel",
+		[]*widget.FormItem{
+			{Text: "Server URL", Widget: urlEntry},
+			{Text: "API Key", Widget: keyEntry},
+			{Text: "Machine Name", Widget: machineEntry},
+		},
+		func(ok bool) {
+			if !ok {
+				return
+			}
+			u.cfg.ServerURL = strings.TrimRight(strings.TrimSpace(urlEntry.Text), "/")
+			u.cfg.APIKey = keyEntry.Text
+			u.cfg.MachineName = strings.TrimSpace(machineEntry.Text)
+			u.client = api.New(u.cfg.ServerURL, u.cfg.APIKey)
+			if err := u.cfg.Save(); err != nil {
+				dialog.ShowError(fmt.Errorf("could not save config: %w", err), u.win)
+			}
+		},
+		u.win,
+	)
+	d.Resize(fyne.NewSize(420, 250))
+	d.Show()
+}
+
+var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+func toSlug(s string) string {
+	s = strings.ToLower(s)
+	s = slugRe.ReplaceAllString(s, "-")
+	return strings.Trim(s, "-")
+}
+
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}

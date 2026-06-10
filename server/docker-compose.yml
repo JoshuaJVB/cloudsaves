@@ -1,0 +1,10 @@
+services:
+  cloudsave:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    environment:
+      - API_KEY=changeme-replace-this
+    restart: unless-stopped
