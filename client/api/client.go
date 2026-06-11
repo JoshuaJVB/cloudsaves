@@ -16,12 +16,70 @@ type Game struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+func (g *Game) UnmarshalJSON(data []byte) error {
+	type alias Game
+	aux := &struct {
+		CreatedAt string `json:"created_at"`
+		*alias
+	}{alias: (*alias)(g)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	t, err := parseFlexTime(aux.CreatedAt)
+	if err != nil {
+		return err
+	}
+	g.CreatedAt = t
+	return nil
+}
+
 type Save struct {
 	ID          string    `json:"id"`
 	GameID      string    `json:"game_id"`
 	MachineName string    `json:"machine_name"`
 	UploadedAt  time.Time `json:"uploaded_at"`
 	FileSize    int64     `json:"file_size"`
+}
+
+func (s *Save) UnmarshalJSON(data []byte) error {
+	type alias Save
+	aux := &struct {
+		UploadedAt string `json:"uploaded_at"`
+		*alias
+	}{alias: (*alias)(s)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+	t, err := parseFlexTime(aux.UploadedAt)
+	if err != nil {
+		return err
+	}
+	s.UploadedAt = t
+	return nil
+}
+
+// parseFlexTime parses timestamps with or without a timezone. The server is
+// SQLite-backed and can return naive timestamps like
+// "2026-06-11T00:31:32.779899"; these are treated as UTC, which is the zone
+// the server actually records (datetime.now(timezone.utc)). Comparing the
+// resulting instant against a local file's mod time is correct either way,
+// since time comparisons operate on absolute instants.
+func parseFlexTime(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.999999",
+		"2006-01-02T15:04:05",
+	}
+	for _, l := range layouts {
+		if t, err := time.Parse(l, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse timestamp %q", s)
 }
 
 type Client struct {

@@ -102,6 +102,11 @@ func (u *App) build() fyne.CanvasObject {
 	)
 
 	u.statusLabel = widget.NewLabel("")
+	u.statusLabel.Wrapping = fyne.TextWrapWord
+	statusCopyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+		u.win.Clipboard().SetContent(u.statusLabel.Text)
+	})
+	statusRow := container.NewBorder(nil, nil, nil, statusCopyBtn, u.statusLabel)
 
 	u.pushBtn = widget.NewButtonWithIcon("Push to Server", theme.UploadIcon(), u.onPush)
 	u.pullBtn = widget.NewButtonWithIcon("Pull from Server", theme.DownloadIcon(), u.onPull)
@@ -115,7 +120,7 @@ func (u *App) build() fyne.CanvasObject {
 		widget.NewSeparator(),
 		localCard,
 		serverCard,
-		u.statusLabel,
+		statusRow,
 		widget.NewSeparator(),
 		actionRow,
 	)
@@ -129,6 +134,22 @@ func (u *App) build() fyne.CanvasObject {
 func labelRow(heading string, value *widget.Label) *fyne.Container {
 	h := widget.NewLabelWithStyle(heading, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	return container.NewBorder(nil, nil, h, nil, value)
+}
+
+// showError displays an error in a dialog whose message text is selectable
+// and copyable, with a one-click Copy button — much faster than retyping an
+// error when troubleshooting.
+func (u *App) showError(err error, w fyne.Window) {
+	msg := err.Error()
+	body := widget.NewLabel(msg)
+	body.Wrapping = fyne.TextWrapWord
+	copyBtn := widget.NewButtonWithIcon("Copy", theme.ContentCopyIcon(), func() {
+		w.Clipboard().SetContent(msg)
+	})
+	d := dialog.NewCustom("Error", "Close",
+		container.NewBorder(nil, copyBtn, nil, nil, body), w)
+	d.Resize(fyne.NewSize(460, 240))
+	d.Show()
 }
 
 func (u *App) refreshList() {
@@ -245,17 +266,17 @@ func (u *App) onPush() {
 
 		// Ensure the game is registered (idempotent).
 		if err := u.client.RegisterGame(id, entry.Name); err != nil {
-			dialog.ShowError(fmt.Errorf("server registration failed: %w", err), u.win)
+			u.showError(fmt.Errorf("server registration failed: %w", err), u.win)
 			return
 		}
 
 		var buf bytes.Buffer
 		if err := archive.Pack(entry.LocalPath, &buf); err != nil {
-			dialog.ShowError(fmt.Errorf("could not zip save: %w", err), u.win)
+			u.showError(fmt.Errorf("could not zip save: %w", err), u.win)
 			return
 		}
 		if err := u.client.UploadSave(id, u.cfg.MachineName, &buf); err != nil {
-			dialog.ShowError(fmt.Errorf("upload failed: %w", err), u.win)
+			u.showError(fmt.Errorf("upload failed: %w", err), u.win)
 			return
 		}
 		dialog.ShowInformation("Done", "Save pushed to server.", u.win)
@@ -285,7 +306,7 @@ func (u *App) onPull() {
 
 				rc, err := u.client.DownloadLatest(id)
 				if err != nil {
-					dialog.ShowError(err, u.win)
+					u.showError(err, u.win)
 					return
 				}
 				defer rc.Close()
@@ -293,7 +314,7 @@ func (u *App) onPull() {
 				// Stream to temp file so zip.NewReader gets a ReaderAt + known size.
 				tmp, err := os.CreateTemp("", "cloudsave-*.zip")
 				if err != nil {
-					dialog.ShowError(err, u.win)
+					u.showError(err, u.win)
 					return
 				}
 				defer tmp.Close()
@@ -301,13 +322,13 @@ func (u *App) onPull() {
 
 				size, err := io.Copy(tmp, rc)
 				if err != nil {
-					dialog.ShowError(err, u.win)
+					u.showError(err, u.win)
 					return
 				}
 
 				dest := filepath.Dir(entry.LocalPath)
 				if err := archive.Unpack(tmp, size, dest); err != nil {
-					dialog.ShowError(fmt.Errorf("could not extract save: %w", err), u.win)
+					u.showError(fmt.Errorf("could not extract save: %w", err), u.win)
 					return
 				}
 				dialog.ShowInformation("Done", "Save pulled from server.", u.win)
@@ -348,7 +369,7 @@ func (u *App) showAddDialog() {
 			name := strings.TrimSpace(nameEntry.Text)
 			path := strings.TrimSpace(pathEntry.Text)
 			if name == "" || path == "" {
-				dialog.ShowError(fmt.Errorf("both fields are required"), u.win)
+				u.showError(fmt.Errorf("both fields are required"), u.win)
 				return
 			}
 			id := toSlug(name)
@@ -358,7 +379,7 @@ func (u *App) showAddDialog() {
 			// happens (idempotently) on the first push.
 			u.cfg.Games[id] = config.GameEntry{Name: name, LocalPath: path}
 			if err := u.cfg.Save(); err != nil {
-				dialog.ShowError(fmt.Errorf("could not save config: %w", err), u.win)
+				u.showError(fmt.Errorf("could not save config: %w", err), u.win)
 				return
 			}
 			u.refreshList()
@@ -366,7 +387,7 @@ func (u *App) showAddDialog() {
 
 			go func() {
 				if err := u.client.RegisterGame(id, name); err != nil {
-					dialog.ShowError(fmt.Errorf(
+					u.showError(fmt.Errorf(
 						"game saved locally, but could not register with the server "+
 							"(it will retry on push):\n%w", err), u.win)
 				}
@@ -403,7 +424,7 @@ func (u *App) showSettings() {
 			u.cfg.MachineName = strings.TrimSpace(machineEntry.Text)
 			u.client = api.New(u.cfg.ServerURL, u.cfg.APIKey)
 			if err := u.cfg.Save(); err != nil {
-				dialog.ShowError(fmt.Errorf("could not save config: %w", err), u.win)
+				u.showError(fmt.Errorf("could not save config: %w", err), u.win)
 			}
 		},
 		u.win,
