@@ -106,6 +106,31 @@ The status line tells you which side is newer before you act:
 | In sync | Timestamps match |
 | No saves on server yet | First time for this game — push to start |
 
+### Save history
+
+The server keeps the **last 5 saves** per game. The Server card has a dropdown listing them, each labelled with its **save time** and the **machine** that pushed it. Pulling fetches whichever save is selected — so you can roll back to an older save, not just the latest. The machine name comes from each client's **Settings → Machine Name**.
+
+---
+
+## Updating
+
+**Server** — on the host running Docker:
+
+```bash
+cd /mnt/user/appdata/cloudsaves
+./update-server.sh
+```
+
+It pulls the latest code, rebuilds the image, and restarts the container — preserving your API key and saved data. To override the key: `API_KEY=yourkey ./update-server.sh`.
+
+**Client** — on Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File update-client.ps1
+```
+
+It downloads the newest installer from the [Releases page](https://github.com/JoshuaJVB/cloudsaves/releases) and installs it silently (closing the app first if it's open).
+
 ---
 
 ## Project Structure

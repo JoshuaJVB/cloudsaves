@@ -1,0 +1,9 @@
+# Server runtime data (SQLite DB + stored save zips)
+server/data/
+
+# Client build artifacts
+client/Icon.png
+client/CloudSave.exe
+client/cloudsave
+client/cloudsave.exe
+client/*.syso

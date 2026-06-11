@@ -35,6 +35,8 @@ type App struct {
 
 	localPathLabel     *widget.Label
 	localModLabel      *widget.Label
+	serverSavesSelect  *widget.Select
+	serverSaves        []api.Save // parallel to serverSavesSelect.Options, newest first
 	serverMachineLabel *widget.Label
 	serverSavedLabel   *widget.Label
 	serverTimeLabel    *widget.Label
@@ -90,6 +92,8 @@ func (u *App) build() fyne.CanvasObject {
 	)
 
 	// Server section
+	u.serverSavesSelect = widget.NewSelect(nil, u.onServerSaveSelected)
+	u.serverSavesSelect.PlaceHolder = "No saves on server"
 	u.serverMachineLabel = widget.NewLabel("—")
 	u.serverSavedLabel = widget.NewLabel("—")
 	u.serverTimeLabel = widget.NewLabel("—")
@@ -97,6 +101,7 @@ func (u *App) build() fyne.CanvasObject {
 
 	serverCard := widget.NewCard("Server", "",
 		container.NewVBox(
+			u.serverSavesSelect,
 			labelRow("Machine:", u.serverMachineLabel),
 			labelRow("Saved:", u.serverSavedLabel),
 			labelRow("Uploaded:", u.serverTimeLabel),
@@ -218,8 +223,14 @@ func (u *App) onSelect(name string) {
 		}
 
 		if len(saves) == 0 {
+			u.serverSaves = nil
+			u.serverSavesSelect.Options = nil
+			u.serverSavesSelect.ClearSelected()
+			u.serverSavesSelect.Refresh()
 			u.serverMachineLabel.SetText("—")
 			u.serverSavedLabel.SetText("No saves yet")
+			u.serverTimeLabel.SetText("—")
+			u.serverSizeLabel.SetText("—")
 			u.statusLabel.SetText("No saves on server — push to create the first one.")
 			if localExists {
 				u.pushBtn.Enable()
@@ -227,15 +238,22 @@ func (u *App) onSelect(name string) {
 			return
 		}
 
+		// Populate the history dropdown (newest first). Selecting an entry
+		// drives the detail labels and is what Pull will fetch.
+		u.serverSaves = saves
+		opts := make([]string, len(saves))
+		for i, s := range saves {
+			opts[i] = serverSaveLabel(s)
+		}
+		u.serverSavesSelect.Options = opts
+		u.serverSavesSelect.Refresh()
+		u.serverSavesSelect.SetSelected(opts[0])
+
 		latest := saves[0]
 		serverSaved := latest.SavedAt
 		if serverSaved.IsZero() {
 			serverSaved = latest.UploadedAt
 		}
-		u.serverMachineLabel.SetText(latest.MachineName)
-		u.serverSavedLabel.SetText(serverSaved.Local().Format("2006-01-02 15:04:05"))
-		u.serverTimeLabel.SetText(latest.UploadedAt.Local().Format("2006-01-02 15:04:05"))
-		u.serverSizeLabel.SetText(formatBytes(latest.FileSize))
 
 		// Compare the save *content* times, not the upload time. A small
 		// tolerance absorbs sub-second drift from the upload round-trip so an
@@ -281,6 +299,42 @@ func latestModTime(path string) (time.Time, bool) {
 		return nil
 	})
 	return latest, true
+}
+
+// saveContentTime returns the save's content modification time, falling back to
+// the upload time for old saves recorded before saved_at existed.
+func saveContentTime(s api.Save) time.Time {
+	if s.SavedAt.IsZero() {
+		return s.UploadedAt
+	}
+	return s.SavedAt
+}
+
+// serverSaveLabel formats a save for the history dropdown: "<saved time> — <machine>".
+func serverSaveLabel(s api.Save) string {
+	return fmt.Sprintf("%s — %s",
+		saveContentTime(s).Local().Format("2006-01-02 15:04:05"), s.MachineName)
+}
+
+// selectedServerSave returns the save currently chosen in the history dropdown.
+func (u *App) selectedServerSave() *api.Save {
+	for i, opt := range u.serverSavesSelect.Options {
+		if opt == u.serverSavesSelect.Selected && i < len(u.serverSaves) {
+			return &u.serverSaves[i]
+		}
+	}
+	return nil
+}
+
+func (u *App) onServerSaveSelected(string) {
+	s := u.selectedServerSave()
+	if s == nil {
+		return
+	}
+	u.serverMachineLabel.SetText(s.MachineName)
+	u.serverSavedLabel.SetText(saveContentTime(*s).Local().Format("2006-01-02 15:04:05"))
+	u.serverTimeLabel.SetText(s.UploadedAt.Local().Format("2006-01-02 15:04:05"))
+	u.serverSizeLabel.SetText(formatBytes(s.FileSize))
 }
 
 func (u *App) onPush() {
@@ -329,9 +383,17 @@ func (u *App) onPull() {
 	}
 	entry := u.cfg.Games[id]
 
+	save := u.selectedServerSave()
+	if save == nil {
+		u.showError(fmt.Errorf("no server save selected to pull"), u.win)
+		return
+	}
+	saveID := save.ID
+
 	dialog.ShowConfirm(
 		"Pull Save",
-		"This will overwrite your local files with the server version.\nContinue?",
+		fmt.Sprintf("Overwrite your local files with the save from %s (%s)?",
+			save.MachineName, saveContentTime(*save).Local().Format("2006-01-02 15:04:05")),
 		func(confirmed bool) {
 			if !confirmed {
 				return
@@ -342,7 +404,7 @@ func (u *App) onPull() {
 			go func() {
 				defer prog.Hide()
 
-				rc, err := u.client.DownloadLatest(id)
+				rc, err := u.client.DownloadSave(id, saveID)
 				if err != nil {
 					u.showError(err, u.win)
 					return

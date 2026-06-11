@@ -184,7 +184,17 @@ func (c *Client) UploadSave(gameID, machineName string, savedAt time.Time, data 
 }
 
 func (c *Client) DownloadLatest(gameID string) (io.ReadCloser, error) {
-	resp, err := c.do("GET", c.baseURL+"/games/"+gameID+"/saves/latest", nil, "")
+	return c.download(c.baseURL + "/games/" + gameID + "/saves/latest")
+}
+
+// DownloadSave fetches a specific save by id, for pulling an older save from
+// the server history rather than just the latest.
+func (c *Client) DownloadSave(gameID, saveID string) (io.ReadCloser, error) {
+	return c.download(c.baseURL + "/games/" + gameID + "/saves/" + saveID)
+}
+
+func (c *Client) download(url string) (io.ReadCloser, error) {
+	resp, err := c.do("GET", url, nil, "")
 	if err != nil {
 		return nil, err
 	}
