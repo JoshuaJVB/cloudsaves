@@ -43,7 +43,9 @@ The server listens on port `45231`. Saves are persisted in `server/data/` on the
 
 ## Client Setup
 
-**Prerequisites:** [Go 1.21+](https://go.dev/dl/)
+> **Prebuilt downloads:** Every [release](https://github.com/JoshuaJVB/cloudsaves/releases) ships ready-to-run binaries — `CloudSave-Setup.exe` (Windows installer) and `cloudsave-linux-amd64` (Linux binary). On Linux: `chmod +x cloudsave-linux-amd64 && ./cloudsave-linux-amd64`. The Linux binary needs the usual desktop GL/X11 runtime libraries (`libgl1`, `libx11-6` and friends — present on any standard desktop). Building from source is only needed if you want to modify the client.
+
+**Prerequisites (building from source):** [Go 1.21+](https://go.dev/dl/)
 
 Fyne (the UI library) requires a C compiler:
 - **Windows:** Install [TDM-GCC](https://jmeubank.github.io/tdm-gcc/) or [MSYS2](https://www.msys2.org/)
