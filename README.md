@@ -91,9 +91,11 @@ On subsequent runs, just select the game from the dropdown — the path is remem
 
 ## How Push / Pull Works
 
-When you **push**, the client zips your save folder (or file) and uploads it to the server, tagged with your machine name and the current timestamp.
+When you **push**, the client zips your save folder (or file) and uploads it to the server, tagged with your machine name and the save's **modification time** (when you last played — not when you uploaded).
 
-When you **pull**, the server sends the most recent zip, which is extracted back into the original location, overwriting what's there. A confirmation dialog appears before any overwrite.
+When you **pull**, the server sends the save with the newest modification time, which is extracted back into the original location, overwriting what's there. A confirmation dialog appears before any overwrite.
+
+Newer/older is decided by comparing the save's modification time on each side — so the same save pushed from one machine reads as "in sync" on another, and a genuinely newer local save is never overwritten by an older one just because it was uploaded more recently. The Server card shows both **Saved** (content modification time, used for the comparison) and **Uploaded** (when it reached the server).
 
 The status line tells you which side is newer before you act:
 
@@ -144,6 +146,6 @@ All routes require the header `X-API-Key: <your-key>`.
 | `GET` | `/games` | List all registered games |
 | `POST` | `/games` | Register a game `{id, name}` — idempotent |
 | `GET` | `/games/{id}/saves` | List saves (newest first) |
-| `POST` | `/games/{id}/saves` | Upload a save (multipart: `file`, `machine_name`) |
+| `POST` | `/games/{id}/saves` | Upload a save (multipart: `file`, `machine_name`, `saved_at`) |
 | `GET` | `/games/{id}/saves/latest` | Download the most recent save |
 | `GET` | `/games/{id}/saves/{save_id}` | Download a specific save |

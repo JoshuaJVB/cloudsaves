@@ -36,6 +36,7 @@ type App struct {
 	localPathLabel     *widget.Label
 	localModLabel      *widget.Label
 	serverMachineLabel *widget.Label
+	serverSavedLabel   *widget.Label
 	serverTimeLabel    *widget.Label
 	serverSizeLabel    *widget.Label
 	statusLabel        *widget.Label
@@ -90,12 +91,14 @@ func (u *App) build() fyne.CanvasObject {
 
 	// Server section
 	u.serverMachineLabel = widget.NewLabel("—")
+	u.serverSavedLabel = widget.NewLabel("—")
 	u.serverTimeLabel = widget.NewLabel("—")
 	u.serverSizeLabel = widget.NewLabel("—")
 
 	serverCard := widget.NewCard("Server", "",
 		container.NewVBox(
 			labelRow("Machine:", u.serverMachineLabel),
+			labelRow("Saved:", u.serverSavedLabel),
 			labelRow("Uploaded:", u.serverTimeLabel),
 			labelRow("Size:", u.serverSizeLabel),
 		),
@@ -190,12 +193,9 @@ func (u *App) onSelect(name string) {
 
 	// Reset UI state
 	u.localPathLabel.SetText(entry.LocalPath)
-	if fi, err := os.Stat(entry.LocalPath); err == nil {
-		u.localModLabel.SetText(fi.ModTime().Format("2006-01-02 15:04:05"))
-	} else {
-		u.localModLabel.SetText("(not found locally)")
-	}
+	u.localModLabel.SetText("checking...")
 	u.serverMachineLabel.SetText("checking...")
+	u.serverSavedLabel.SetText("—")
 	u.serverTimeLabel.SetText("—")
 	u.serverSizeLabel.SetText("—")
 	u.statusLabel.SetText("")
@@ -203,44 +203,54 @@ func (u *App) onSelect(name string) {
 	u.pullBtn.Disable()
 
 	go func() {
+		localMod, localExists := latestModTime(entry.LocalPath)
+		if localExists {
+			u.localModLabel.SetText(localMod.Local().Format("2006-01-02 15:04:05"))
+		} else {
+			u.localModLabel.SetText("(not found locally)")
+		}
+
 		saves, err := u.client.ListSaves(id)
 		if err != nil {
 			u.serverMachineLabel.SetText("—")
-			u.serverTimeLabel.SetText("—")
-			u.serverSizeLabel.SetText("—")
 			u.statusLabel.SetText("Could not reach server: " + err.Error())
 			return
 		}
 
 		if len(saves) == 0 {
 			u.serverMachineLabel.SetText("—")
-			u.serverTimeLabel.SetText("No saves yet")
-			u.serverSizeLabel.SetText("—")
+			u.serverSavedLabel.SetText("No saves yet")
 			u.statusLabel.SetText("No saves on server — push to create the first one.")
-			u.pushBtn.Enable()
+			if localExists {
+				u.pushBtn.Enable()
+			}
 			return
 		}
 
 		latest := saves[0]
+		serverSaved := latest.SavedAt
+		if serverSaved.IsZero() {
+			serverSaved = latest.UploadedAt
+		}
 		u.serverMachineLabel.SetText(latest.MachineName)
+		u.serverSavedLabel.SetText(serverSaved.Local().Format("2006-01-02 15:04:05"))
 		u.serverTimeLabel.SetText(latest.UploadedAt.Local().Format("2006-01-02 15:04:05"))
 		u.serverSizeLabel.SetText(formatBytes(latest.FileSize))
 
-		localMod := time.Time{}
-		if fi, err := os.Stat(entry.LocalPath); err == nil {
-			localMod = fi.ModTime()
-		}
-
-		switch {
-		case localMod.IsZero():
+		// Compare the save *content* times, not the upload time. A small
+		// tolerance absorbs sub-second drift from the upload round-trip so an
+		// unchanged save doesn't read as "newer" by a fraction of a second.
+		const slop = 2 * time.Second
+		switch diff := localMod.Sub(serverSaved); {
+		case !localExists:
 			u.statusLabel.SetText("Local save not found — pull to restore.")
 			u.pullBtn.Enable()
-		case localMod.After(latest.UploadedAt):
-			u.statusLabel.SetText("Local is newer than server.")
+		case diff > slop:
+			u.statusLabel.SetText("Local is newer than server — push to update it.")
 			u.pushBtn.Enable()
 			u.pullBtn.Enable()
-		case latest.UploadedAt.After(localMod):
-			u.statusLabel.SetText("Server is newer than local.")
+		case diff < -slop:
+			u.statusLabel.SetText("Server is newer than local — pull to update.")
 			u.pushBtn.Enable()
 			u.pullBtn.Enable()
 		default:
@@ -249,6 +259,28 @@ func (u *App) onSelect(name string) {
 			u.pullBtn.Enable()
 		}
 	}()
+}
+
+// latestModTime returns the most recent modification time of a save. For a
+// directory it returns the newest mtime among all files within (the directory's
+// own mtime doesn't always change when a nested file is written), which is the
+// best proxy for "when this save was last played".
+func latestModTime(path string) (time.Time, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}, false
+	}
+	if !info.IsDir() {
+		return info.ModTime(), true
+	}
+	latest := info.ModTime()
+	_ = filepath.Walk(path, func(_ string, fi os.FileInfo, err error) error {
+		if err == nil && !fi.IsDir() && fi.ModTime().After(latest) {
+			latest = fi.ModTime()
+		}
+		return nil
+	})
+	return latest, true
 }
 
 func (u *App) onPush() {
@@ -270,12 +302,18 @@ func (u *App) onPush() {
 			return
 		}
 
+		savedAt, ok := latestModTime(entry.LocalPath)
+		if !ok {
+			u.showError(fmt.Errorf("local save not found at %s", entry.LocalPath), u.win)
+			return
+		}
+
 		var buf bytes.Buffer
 		if err := archive.Pack(entry.LocalPath, &buf); err != nil {
 			u.showError(fmt.Errorf("could not zip save: %w", err), u.win)
 			return
 		}
-		if err := u.client.UploadSave(id, u.cfg.MachineName, &buf); err != nil {
+		if err := u.client.UploadSave(id, u.cfg.MachineName, savedAt, &buf); err != nil {
 			u.showError(fmt.Errorf("upload failed: %w", err), u.win)
 			return
 		}

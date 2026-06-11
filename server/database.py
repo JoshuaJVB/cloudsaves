@@ -29,8 +29,23 @@ class Save(Base):
     id = Column(String, primary_key=True)
     game_id = Column(String, nullable=False, index=True)
     machine_name = Column(String, nullable=False)
+    # uploaded_at: when the file reached the server.
+    # saved_at: when the save content was actually last modified on the
+    # source machine. saved_at is what determines which save is "newer".
     uploaded_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    saved_at = Column(DateTime(timezone=True), nullable=True)
     file_size = Column(Integer, default=0)
+
+
+def migrate() -> None:
+    """Add columns that may be missing from a pre-existing database."""
+    with engine.begin() as conn:
+        cols = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(saves)").fetchall()]
+        if "saved_at" not in cols:
+            conn.exec_driver_sql("ALTER TABLE saves ADD COLUMN saved_at DATETIME")
+            # Best-effort backfill for existing rows: we have no real save
+            # time for them, so fall back to the upload time.
+            conn.exec_driver_sql("UPDATE saves SET saved_at = uploaded_at WHERE saved_at IS NULL")
 
 
 def create_tables() -> None:

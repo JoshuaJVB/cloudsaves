@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
-from database import Game, Save, create_tables, get_db
+from database import Game, Save, create_tables, get_db, migrate
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -23,6 +23,19 @@ app = FastAPI(title="CloudSave")
 def startup() -> None:
     SAVES_DIR.mkdir(parents=True, exist_ok=True)
     create_tables()
+    migrate()
+
+
+def _parse_saved_at(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def require_key(x_api_key: str = Header(...)) -> None:
@@ -50,6 +63,7 @@ class SaveOut(BaseModel):
     game_id: str
     machine_name: str
     uploaded_at: datetime
+    saved_at: datetime | None
     file_size: int
     model_config = {"from_attributes": True}
 
@@ -78,7 +92,7 @@ def list_saves(game_id: str, db: Session = Depends(get_db)):
     return (
         db.query(Save)
         .filter(Save.game_id == game_id)
-        .order_by(Save.uploaded_at.desc())
+        .order_by(Save.saved_at.desc())
         .all()
     )
 
@@ -87,12 +101,14 @@ def list_saves(game_id: str, db: Session = Depends(get_db)):
 async def upload_save(
     game_id: str,
     machine_name: str = Form(...),
+    saved_at: str = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
     if not db.query(Game).filter(Game.id == game_id).first():
         raise HTTPException(404, "Game not found")
 
+    now = datetime.now(timezone.utc)
     save_id = str(uuid.uuid4())
     game_dir = SAVES_DIR / game_id
     game_dir.mkdir(exist_ok=True)
@@ -105,7 +121,8 @@ async def upload_save(
         id=save_id,
         game_id=game_id,
         machine_name=machine_name,
-        uploaded_at=datetime.now(timezone.utc),
+        uploaded_at=now,
+        saved_at=_parse_saved_at(saved_at) or now,
         file_size=dest.stat().st_size,
     )
     db.add(save)
@@ -136,7 +153,7 @@ def download_latest(game_id: str, db: Session = Depends(get_db)):
     save = (
         db.query(Save)
         .filter(Save.game_id == game_id)
-        .order_by(Save.uploaded_at.desc())
+        .order_by(Save.saved_at.desc())
         .first()
     )
     if not save:

@@ -37,7 +37,8 @@ type Save struct {
 	ID          string    `json:"id"`
 	GameID      string    `json:"game_id"`
 	MachineName string    `json:"machine_name"`
-	UploadedAt  time.Time `json:"uploaded_at"`
+	UploadedAt  time.Time `json:"uploaded_at"` // when it reached the server
+	SavedAt     time.Time `json:"saved_at"`    // when the save content was last modified
 	FileSize    int64     `json:"file_size"`
 }
 
@@ -45,16 +46,19 @@ func (s *Save) UnmarshalJSON(data []byte) error {
 	type alias Save
 	aux := &struct {
 		UploadedAt string `json:"uploaded_at"`
+		SavedAt    string `json:"saved_at"`
 		*alias
 	}{alias: (*alias)(s)}
 	if err := json.Unmarshal(data, aux); err != nil {
 		return err
 	}
-	t, err := parseFlexTime(aux.UploadedAt)
-	if err != nil {
+	var err error
+	if s.UploadedAt, err = parseFlexTime(aux.UploadedAt); err != nil {
 		return err
 	}
-	s.UploadedAt = t
+	if s.SavedAt, err = parseFlexTime(aux.SavedAt); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -153,10 +157,11 @@ func (c *Client) ListSaves(gameID string) ([]Save, error) {
 	return out, json.NewDecoder(resp.Body).Decode(&out)
 }
 
-func (c *Client) UploadSave(gameID, machineName string, data io.Reader) error {
+func (c *Client) UploadSave(gameID, machineName string, savedAt time.Time, data io.Reader) error {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	_ = mw.WriteField("machine_name", machineName)
+	_ = mw.WriteField("saved_at", savedAt.UTC().Format(time.RFC3339))
 	fw, err := mw.CreateFormFile("file", gameID+".zip")
 	if err != nil {
 		return err
