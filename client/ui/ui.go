@@ -78,7 +78,7 @@ func (u *App) build() fyne.CanvasObject {
 
 	// Local section
 	u.localPathLabel = widget.NewLabel("—")
-	u.localPathLabel.Wrapping = fyne.TextWrapWord
+	u.localPathLabel.Truncation = fyne.TextTruncateEllipsis
 	u.localModLabel = widget.NewLabel("—")
 
 	localCard := widget.NewCard("Local", "",
@@ -121,10 +121,14 @@ func (u *App) build() fyne.CanvasObject {
 	)
 }
 
-// labelRow builds a tight two-label row used in the info cards.
+// labelRow builds a two-label row used in the info cards. A Border layout
+// pins the bold heading to the left and lets the value fill the remaining
+// width — this gives the value label a real width constraint so long text
+// (e.g. a save path) truncates with an ellipsis instead of collapsing the
+// whole window into a single column of characters.
 func labelRow(heading string, value *widget.Label) *fyne.Container {
 	h := widget.NewLabelWithStyle(heading, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	return container.NewHBox(h, value)
+	return container.NewBorder(nil, nil, h, nil, value)
 }
 
 func (u *App) refreshList() {
