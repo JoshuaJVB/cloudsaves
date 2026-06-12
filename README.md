@@ -45,6 +45,16 @@ The server listens on port `45231`. Saves are persisted in `server/data/` on the
 
 > **Prebuilt downloads:** Every [release](https://github.com/JoshuaJVB/cloudsaves/releases) ships ready-to-run binaries — `CloudSave-Setup.exe` (Windows installer) and `cloudsave-linux-amd64` (Linux binary). On Linux: `chmod +x cloudsave-linux-amd64 && ./cloudsave-linux-amd64`. The Linux binary needs the usual desktop GL/X11 runtime libraries (`libgl1`, `libx11-6` and friends — present on any standard desktop). Building from source is only needed if you want to modify the client.
 
+### "Windows protected your PC"
+
+The installer is unsigned (no code-signing certificate), so Windows SmartScreen warns about it when you run it straight from a browser download. It's safe — it just hasn't built download reputation. To avoid the prompt:
+
+- **Easiest:** update via `update-client.ps1` — it removes the "from the internet" flag (`Unblock-File`) before installing, so SmartScreen stays quiet.
+- **Manual:** right-click the downloaded `CloudSave-Setup.exe` → **Properties** → tick **Unblock** → **OK**, then run it. (Or in PowerShell: `Unblock-File CloudSave-Setup.exe`.)
+- **One-off:** on the warning, click **More info → Run anyway**.
+
+Fully removing the prompt for all users would require a paid code-signing certificate (an EV cert for instant trust) — overkill for a self-hosted tool.
+
 **Prerequisites (building from source):** [Go 1.21+](https://go.dev/dl/)
 
 Fyne (the UI library) requires a C compiler:

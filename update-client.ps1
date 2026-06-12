@@ -18,6 +18,10 @@ $out = Join-Path $env:TEMP 'CloudSave-Setup.exe'
 Write-Host "Downloading CloudSave $($rel.tag_name)..."
 Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $out
 
+# Strip the Mark-of-the-Web so SmartScreen doesn't flag the (unsigned)
+# installer with a "Windows protected your PC" prompt.
+Unblock-File -Path $out
+
 # Close the app if it's running so the installer can replace the executable.
 Get-Process -Name CloudSave -ErrorAction SilentlyContinue | Stop-Process -Force
 
