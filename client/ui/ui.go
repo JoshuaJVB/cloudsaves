@@ -22,7 +22,11 @@ import (
 	"cloudsave/api"
 	"cloudsave/archive"
 	"cloudsave/config"
+	"cloudsave/discover"
 )
+
+// defaultPort is the CloudSave server port used when scanning the LAN.
+const defaultPort = 45231
 
 type App struct {
 	fyneApp fyne.App
@@ -30,8 +34,9 @@ type App struct {
 	cfg     *config.Config
 	client  *api.Client
 
-	gameSelect *widget.Select
-	gameIDs    []string // parallel slice to gameSelect.Options
+	gameSelect      *widget.Select
+	gameIDs         []string          // parallel slice to gameSelect.Options
+	serverGameNames map[string]string // game id -> name, as known to the server
 
 	localPathLabel     *widget.Label
 	localModLabel      *widget.Label
@@ -59,10 +64,12 @@ func Run() {
 		cfg = &config.Config{Games: make(map[string]config.GameEntry)}
 	}
 	u.cfg = cfg
+	u.serverGameNames = make(map[string]string)
 	u.client = api.New(cfg.ServerURL, cfg.APIKey)
 
 	w.SetContent(u.build())
-	u.refreshList()
+	u.refreshList()  // show local games immediately
+	u.refreshGames() // then merge in games registered on the server
 	w.ShowAndRun()
 }
 
@@ -83,11 +90,13 @@ func (u *App) build() fyne.CanvasObject {
 	u.localPathLabel = widget.NewLabel("—")
 	u.localPathLabel.Truncation = fyne.TextTruncateEllipsis
 	u.localModLabel = widget.NewLabel("—")
+	setLocationBtn := widget.NewButtonWithIcon("Set Location…", theme.FolderOpenIcon(), u.onSetLocation)
 
 	localCard := widget.NewCard("Local", "",
 		container.NewVBox(
 			labelRow("Path:", u.localPathLabel),
 			labelRow("Modified:", u.localModLabel),
+			setLocationBtn,
 		),
 	)
 
@@ -160,11 +169,38 @@ func (u *App) showError(err error, w fyne.Window) {
 	d.Show()
 }
 
+// refreshGames fetches the games registered on the server and merges them into
+// the dropdown, so a client can see (and set up) games it doesn't have locally.
+func (u *App) refreshGames() {
+	go func() {
+		games, err := u.client.ListGames()
+		if err != nil {
+			return // server unreachable — local games are still listed
+		}
+		m := make(map[string]string, len(games))
+		for _, g := range games {
+			m[g.ID] = g.Name
+		}
+		u.serverGameNames = m
+		u.refreshList()
+	}()
+}
+
 func (u *App) refreshList() {
-	type pair struct{ id, name string }
+	type pair struct {
+		id, name string
+		local    bool
+	}
 	var pairs []pair
+	seen := map[string]bool{}
 	for id, g := range u.cfg.Games {
-		pairs = append(pairs, pair{id, g.Name})
+		pairs = append(pairs, pair{id, g.Name, true})
+		seen[id] = true
+	}
+	for id, name := range u.serverGameNames {
+		if !seen[id] {
+			pairs = append(pairs, pair{id, name, false})
+		}
 	}
 	sort.Slice(pairs, func(i, j int) bool { return pairs[i].name < pairs[j].name })
 
@@ -173,9 +209,60 @@ func (u *App) refreshList() {
 	for i, p := range pairs {
 		u.gameIDs[i] = p.id
 		names[i] = p.name
+		if !p.local {
+			names[i] = p.name + "  (on server — no local copy)"
+		}
 	}
 	u.gameSelect.Options = names
 	u.gameSelect.Refresh()
+}
+
+// gameName returns the display name for a game id, whether it's local or only
+// known from the server.
+func (u *App) gameName(id string) string {
+	if g, ok := u.cfg.Games[id]; ok {
+		return g.Name
+	}
+	if n, ok := u.serverGameNames[id]; ok {
+		return n
+	}
+	return id
+}
+
+// selectGameByID selects the dropdown entry for a game id (its label may carry
+// a suffix, so match by id rather than name).
+func (u *App) selectGameByID(id string) {
+	for i, gid := range u.gameIDs {
+		if gid == id {
+			u.gameSelect.SetSelected(u.gameSelect.Options[i])
+			return
+		}
+	}
+}
+
+// onSetLocation maps (or re-points) the selected game's local save folder. This
+// is how a game that only exists on the server gets a local save location.
+func (u *App) onSetLocation() {
+	id, ok := u.selectedID()
+	if !ok {
+		u.showError(fmt.Errorf("select a game first"), u.win)
+		return
+	}
+	name := u.gameName(id)
+	dialog.ShowFolderOpen(func(lu fyne.ListableURI, err error) {
+		if err != nil || lu == nil {
+			return
+		}
+		u.cfg.Games[id] = config.GameEntry{Name: name, LocalPath: lu.Path()}
+		if err := u.cfg.Save(); err != nil {
+			u.showError(fmt.Errorf("could not save config: %w", err), u.win)
+			return
+		}
+		u.refreshList()
+		// Force a fresh onSelect even if the label text is unchanged.
+		u.gameSelect.ClearSelected()
+		u.selectGameByID(id)
+	}, u.win)
 }
 
 func (u *App) selectedID() (string, bool) {
@@ -194,10 +281,14 @@ func (u *App) onSelect(name string) {
 	if !ok {
 		return
 	}
-	entry := u.cfg.Games[id]
+	entry, hasLocal := u.cfg.Games[id]
 
 	// Reset UI state
-	u.localPathLabel.SetText(entry.LocalPath)
+	if hasLocal {
+		u.localPathLabel.SetText(entry.LocalPath)
+	} else {
+		u.localPathLabel.SetText("(no local location set — click \"Set Location…\")")
+	}
 	u.localModLabel.SetText("checking...")
 	u.serverMachineLabel.SetText("checking...")
 	u.serverSavedLabel.SetText("—")
@@ -208,11 +299,17 @@ func (u *App) onSelect(name string) {
 	u.pullBtn.Disable()
 
 	go func() {
-		localMod, localExists := latestModTime(entry.LocalPath)
+		var localMod time.Time
+		localExists := false
+		if hasLocal {
+			localMod, localExists = latestModTime(entry.LocalPath)
+		}
 		if localExists {
 			u.localModLabel.SetText(localMod.Local().Format("2006-01-02 15:04:05"))
-		} else {
+		} else if hasLocal {
 			u.localModLabel.SetText("(not found locally)")
+		} else {
+			u.localModLabel.SetText("—")
 		}
 
 		saves, err := u.client.ListSaves(id)
@@ -260,6 +357,8 @@ func (u *App) onSelect(name string) {
 		// unchanged save doesn't read as "newer" by a fraction of a second.
 		const slop = 2 * time.Second
 		switch diff := localMod.Sub(serverSaved); {
+		case !hasLocal:
+			u.statusLabel.SetText("This game is on the server but not set up here — click \"Set Location…\" to choose where saves go, then pull.")
 		case !localExists:
 			u.statusLabel.SetText("Local save not found — pull to restore.")
 			u.pullBtn.Enable()
@@ -502,6 +601,10 @@ func (u *App) showAddDialog() {
 func (u *App) showSettings() {
 	urlEntry := widget.NewEntry()
 	urlEntry.SetText(u.cfg.ServerURL)
+	scanBtn := widget.NewButtonWithIcon("Scan", theme.SearchIcon(), func() {
+		u.scanForServers(urlEntry)
+	})
+	urlRow := container.NewBorder(nil, nil, nil, scanBtn, urlEntry)
 
 	keyEntry := widget.NewPasswordEntry()
 	keyEntry.SetText(u.cfg.APIKey)
@@ -511,7 +614,7 @@ func (u *App) showSettings() {
 
 	d := dialog.NewForm("Settings", "Save", "Cancel",
 		[]*widget.FormItem{
-			{Text: "Server URL", Widget: urlEntry},
+			{Text: "Server URL", Widget: urlRow},
 			{Text: "API Key", Widget: keyEntry},
 			{Text: "Machine Name", Widget: machineEntry},
 		},
@@ -529,8 +632,39 @@ func (u *App) showSettings() {
 		},
 		u.win,
 	)
-	d.Resize(fyne.NewSize(420, 250))
+	d.Resize(fyne.NewSize(440, 250))
 	d.Show()
+}
+
+// scanForServers probes the local network for CloudSave servers and fills the
+// given entry with the result (or lets the user pick if several are found).
+func (u *App) scanForServers(target *widget.Entry) {
+	prog := dialog.NewProgressInfinite("Scanning",
+		fmt.Sprintf("Looking for CloudSave servers on your network (port %d)...", defaultPort), u.win)
+	prog.Show()
+
+	go func() {
+		servers := discover.Servers(defaultPort, 500*time.Millisecond)
+		prog.Hide()
+
+		switch len(servers) {
+		case 0:
+			dialog.ShowInformation("Scan complete",
+				fmt.Sprintf("No CloudSave servers found on port %d.\nYou can still enter the address manually.", defaultPort), u.win)
+		case 1:
+			target.SetText(servers[0])
+			dialog.ShowInformation("Server found", "Using "+servers[0], u.win)
+		default:
+			sel := widget.NewSelect(servers, nil)
+			sel.SetSelected(servers[0])
+			dialog.ShowCustomConfirm("Multiple servers found", "Use", "Cancel", sel,
+				func(ok bool) {
+					if ok && sel.Selected != "" {
+						target.SetText(sel.Selected)
+					}
+				}, u.win)
+		}
+	}()
 }
 
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)

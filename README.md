@@ -81,13 +81,21 @@ go build -o cloudsave .
 
 1. Launch the client (`cloudsave.exe` on Windows, `./cloudsave` on Linux).
 2. Click the **gear icon** (Settings) and fill in:
-   - **Server URL** — e.g. `http://192.168.1.100:45231`
+   - **Server URL** — type it, or click **Scan** to auto-discover servers on your LAN (see below)
    - **API Key** — must match the key set in `docker-compose.yml`
    - **Machine Name** — a label for this PC (pre-filled with your hostname)
 3. Click **Add Game**, enter the game name, and browse to its save folder or file.
 4. Use **Push to Server** or **Pull from Server** as needed.
 
 On subsequent runs, just select the game from the dropdown — the path is remembered.
+
+### Finding the server automatically
+
+In Settings, click **Scan** next to Server URL. The client probes your local network (the `192.168.x.0/24`-style subnet it's attached to) on port `45231` and identifies CloudSave servers by their API signature. If it finds one it fills in the URL; if it finds several, you pick from a list. No server configuration needed — it just has to be reachable on the LAN.
+
+### Setting up a game that's already on the server
+
+The game dropdown lists **every game registered on the server**, not just the ones set up on this PC. Games you haven't mapped locally are marked **"(on server — no local copy)"**. To set one up, select it and click **Set Location…** in the Local card to choose where its saves live on this machine — then pull to bring the save down. The same button re-points an existing game's folder.
 
 ---
 
