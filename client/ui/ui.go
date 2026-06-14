@@ -629,6 +629,10 @@ func (u *App) showSettings() {
 			if err := u.cfg.Save(); err != nil {
 				u.showError(fmt.Errorf("could not save config: %w", err), u.win)
 			}
+			// Re-fetch the server's game list now that the connection
+			// details may have changed (e.g. first-time setup), so the
+			// dropdown populates without needing an app restart.
+			u.refreshGames()
 		},
 		u.win,
 	)
